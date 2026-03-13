@@ -114,9 +114,16 @@ def main():
                 continue
             if content.startswith('[📎 消息类型'):
                 continue
-            # 纯表情过滤
+            # 纯表情过滤（微信用 [微笑] 格式，也兼容 Unicode emoji）
+            import unicodedata
             stripped = content.replace(' ', '')
-            if all(c in '[]' or ord(c) > 0x1F600 for c in stripped if not c.isspace()):
+            non_emoji = [c for c in stripped if c not in '[]' and not c.isspace()
+                         and unicodedata.category(c) not in ('So', 'Sk', 'Cn')
+                         and not (0x1F000 <= ord(c) <= 0x1FFFF)  # Supplemental Symbols
+                         and not (0x2600 <= ord(c) <= 0x27BF)    # Misc Symbols, Dingbats
+                         and not (0xFE00 <= ord(c) <= 0xFE0F)    # Variation Selectors
+                         and not (0x200D == ord(c))]              # ZWJ
+            if stripped and not non_emoji:
                 continue
             filtered.append({
                 'sender': sender,

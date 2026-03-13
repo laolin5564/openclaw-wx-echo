@@ -108,10 +108,21 @@ def main():
     conn = sqlite3.connect(collector_db)
     conn.text_factory = lambda b: b.decode('utf-8', 'replace')
 
+    # 构建 chatroom 过滤条件：只查私聊 + work_groups（不加载全库）
+    conditions = ["msg_time >= ? AND msg_time < ?"]
+    params = [since, until]
+    if work_groups:
+        placeholders = ','.join('?' * len(work_groups))
+        conditions.append(f"(chatroom_id NOT LIKE '%@chatroom' OR chatroom_id IN ({placeholders}))")
+        params.extend(work_groups.keys())
+    else:
+        conditions.append("chatroom_id NOT LIKE '%@chatroom'")
+
+    where = ' AND '.join(conditions)
     all_rows = conn.execute(
-        "SELECT chatroom_id, sender, content, msg_time FROM messages "
-        "WHERE msg_time >= ? AND msg_time < ? ORDER BY msg_time ASC",
-        (since, until)
+        f"SELECT chatroom_id, sender, content, msg_time FROM messages "
+        f"WHERE {where} ORDER BY msg_time ASC",
+        params
     ).fetchall()
 
     total_messages = len(all_rows)

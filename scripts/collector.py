@@ -402,7 +402,7 @@ def discover_chatrooms():
             conn = sqlite3.connect(f'file:{session_db}?mode=ro', uri=True)
             conn.text_factory = lambda b: b.decode('utf-8', errors='replace')
             # session 表通常有 username 字段
-            for tbl in ['session', 'Session']:
+            for tbl in ['SessionTable', 'session', 'Session']:
                 try:
                     cols = [r[1] for r in conn.execute(f"PRAGMA table_info({tbl})").fetchall()]
                     name_col = next((c for c in ['userName', 'username', 'strUsrName'] if c in cols), None)
@@ -418,25 +418,20 @@ def discover_chatrooms():
         except Exception as e:
             print(f'[discover] session.db 读取失败: {e}')
 
-    # 也从 contact.db 补充私聊（有消息表的联系人）
+    # 也从 contact.db 补充群聊（不扫描全部联系人，太慢）
     if os.path.exists(CONTACT_DB):
         try:
             conn = sqlite3.connect(f'file:{CONTACT_DB}?mode=ro', uri=True)
             conn.text_factory = lambda b: b.decode('utf-8', errors='replace')
+            # 只扫群聊（@chatroom），跳过 97K+ 个人联系人
             rows = conn.execute(
-                "SELECT username FROM contact WHERE username != '' AND username NOT LIKE 'gh_%'"
+                "SELECT username FROM contact WHERE username LIKE '%@chatroom' AND username NOT LIKE 'gh_%'"
             ).fetchall()
             conn.close()
-            total_contacts = len(rows)
-            checked = 0
             for (uid,) in rows:
                 if uid and not _is_spam(uid) and uid not in discovered:
-                    db_path, _ = find_msg_table(uid)
-                    if db_path:
-                        discovered.add(uid)
-                checked += 1
-                if checked % 100 == 0:
-                    print(f'[discover] 联系人扫描进度: {checked}/{total_contacts}')
+                    discovered.add(uid)
+            print(f'[discover] contact.db 补充 {len(rows)} 个群聊')
         except Exception as e:
             print(f'[discover] contact.db 读取失败: {e}')
 
@@ -496,16 +491,23 @@ def run_sync(chatroom_filter=None, auto_discover=True):
         if chatroom_filter and cid != chatroom_filter:
             continue
         last = states.get(cid, '0')
-        n, new_lid = sync_one(cid, last)
-        if n > 0 or new_lid != last:
-            with sqlite3.connect(COLLECTOR_DB, timeout=30) as conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO sync_state(chatroom_id,last_local_id,last_sync_at) VALUES(?,?,strftime('%s','now'))",
-                    (cid, new_lid)
-                )
-            if n > 0:
-                print(f'[sync] {get_name(cid)}: +{n}')
-                total_inserted += n
+        chat_total = 0
+        # 循环直到没有新消息（每批 LIMIT 2000）
+        while True:
+            n, new_lid = sync_one(cid, last)
+            if n > 0 or new_lid != last:
+                with sqlite3.connect(COLLECTOR_DB, timeout=30) as conn:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO sync_state(chatroom_id,last_local_id,last_sync_at) VALUES(?,?,strftime('%s','now'))",
+                        (cid, new_lid)
+                    )
+                chat_total += n
+                last = new_lid
+            if n == 0:
+                break  # 没有新消息了
+        if chat_total > 0:
+            print(f'[sync] {get_name(cid)}: +{chat_total}')
+            total_inserted += chat_total
 
     print(f'[sync] 完成，共写入 {total_inserted} 条新消息')
     return total_inserted
